@@ -1,9 +1,10 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent
 
-from utils import init_weights
+from utils import init_weights, init_weights_orthogonal_normal
 
 sys_wide_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -13,6 +14,7 @@ class Encoder(nn.Module):
     A CNN encoder built from `len(num_filters)` x a block of `num_convs_per_block` convolutional layers, after each
     a pooling operation is called. A RELU activation is used after each conv layer.
     """
+
     def __init__(self,
                  input_ch,
                  num_filters,
@@ -48,7 +50,7 @@ class Encoder(nn.Module):
             layers.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, padding=int(padding)))
             layers.append(nn.ReLU(inplace=True))
 
-            for _ in range(num_convs_per_block-1):
+            for _ in range(num_convs_per_block - 1):
                 layers.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, padding=int(padding)))
                 layers.append(nn.ReLU(inplace=True))
 
@@ -59,19 +61,18 @@ class Encoder(nn.Module):
 
 
 class AxisAlignedConvGaussian(nn.Module):
-     r"""
+    r"""
      Convolutional network that parametrizes a Gaussian with axis aligned covariance matrix.
      """
 
-     def __init__(self,
-                  input_ch,
-                  num_filters,
-                  num_convs_per_block,
-                  latent_dim,
-                  initializers,
-                  posterior=False):
-
-        self.channel_axis = 1  #TODO: what is this?
+    def __init__(self,
+                 input_ch,
+                 num_filters,
+                 num_convs_per_block,
+                 latent_dim,
+                 initializers,
+                 posterior=False):
+        self.channel_axis = 1  # TODO: what is this?
         self.input_ch = input_ch
         self.num_filters = num_filters
         self.num_convs_per_block = num_convs_per_block
@@ -125,30 +126,140 @@ class AxisAlignedConvGaussian(nn.Module):
             return diag_cov_multiv_dist
 
 
+class FComb(nn.Module):
+    r"""
+    Combines sample taken from latent space to output of U^2 net.
+    """
+
+    def __init__(self, num_filters, latent_dim, num_output_channels, num_classes, num_convs_fcomb, initializers,
+                 use_tile=True):
+        super(FComb, self).__init__()
+        self.num_output_channels = num_output_channels
+        self.num_classes = num_classes
+        self.num_filters = num_filters
+        self.latent_dim = latent_dim
+        self.num_convs_fcomb = num_convs_fcomb
+        self.use_tile = use_tile
+        self.name = 'FComb'
+
+        self.channel_axis = 1
+        self.spatial_axes = [2, 3]
+
+        if self.use_tile:
+            layers = \
+                [nn.Conv2d(self.num_filters[0] + self.latent_dim, self.num_filters[0], kernel_size=1),
+                 nn.ReLU(inplace=True)]
+
+            for _ in range(num_convs_fcomb - 2):
+                layers.append(nn.Conv2d(self.num_filters[0], self.num_filters[0], kernel_size=1))
+                layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Conv2d(self.num_filters[0], self.num_classes, kernel_size=1))
+
+            self.layers = nn.Sequential(*layers)
+
+            init_func = init_weights_orthogonal_normal if initializers['w'] == 'orthogonal' else init_weights
+            self.layers.apply(init_func)
+
+    def forward(self, feature_map, z):
+        r"""
+        feature_map: the output feature map from U^2 net
+        z: (batch_size x latent_dim) latent vector
+
+        So broadcast Z to batch_sizexlatent_dimxHxW.
+        """
+        if self.use_tile:
+            # TODO: (z, 1) should be batch size dimension?
+            z = torch.unsqueeze(z, 2)
+            z = self.tile(z, dim=2, n_tile=feature_map.shape[self.spatial_axes[0]])
+            z = torch.unsqueeze(z, 3)
+            z = self.tile(z, dim=3, n_tile=feature_map.shape[self.spatial_axes[1]])
+
+            concat = torch.cat((feature_map, z), dim=self.channel_axis)
+            return self.layers(concat)
+
+    def tile(self, a, dim, n_tile):
+        init_dim = a.size(dim)
+        repeat_idx = [1] * a.dim()
+        repeat_idx[dim] = n_tile
+        a = a.repeat(*repeat_idx)
+        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)]))
+        return torch.index_select(a, dim, order_index)
 
 
+class ProbabilisticUNet(nn.Module):
+    r"""
 
+    """
 
+    def __init__(self, input_channels=1, num_classes=1, num_filters=(32, 64, 128, 192), latent_dim=6, num_convs_fcomb=4,
+                 beta=10.0):
+        super(ProbabilisticUNet, self).__init__()
+        self.num_classes = num_classes
+        self.input_channels = input_channels
+        self.num_filters = num_filters
+        self.latent_dim = latent_dim
+        self.num_convs_fcomb = num_convs_fcomb
+        self.beta = beta
 
+        self.num_convs_per_block = 3
+        self.initializers = {'w': 'he_normal', 'b': 'normal'}
+        # TODO: Clarify why he normal init here ? Read about difference.
+        self.beta = beta
+        self.z_prior_sample = 0
 
+        self.u_net = UNet(self.input_channels,
+                          self.num_classes,
+                          self.num_filters,
+                          self.initializers,
+                          apply_last_layer=False, padding=True).to(sys_wide_device)
 
+        encoder_args = \
+            (self.input_channels, self.num_filters, self.num_convs_per_block, self.latent_dim, self.initializers)
 
+        self.prior = AxisAlignedConvGaussian(*encoder_args, posterior=False).to(sys_wide_device)
+        self.posterior = AxisAlignedConvGaussian(*encoder_args, posterior=True).to(sys_wide_device)
+        self.fcomb = FComb(self.num_filters,
+                           self.latent_dim,
+                           self.input_channels,
+                           self.num_classes,
+                           self.num_convs_fcomb,
+                           {'w': 'orthogonal', 'b': 'normal'}, use_tile=True).to(sys_wide_device)
+        # TODO: Clarify why orthogonal init here?
 
+    def forward(self, patch, mask, training=True):
+        r"""
 
+        """
+        if training:
+            self.posterior_latent_space = self.posterior.forward(patch, mask)
+        self.prior_latent_space = self.prior.forward(patch, mask)
+        self.unet_features = self.unet.forward(patch, False)
 
+    def sample(self, testing=False):
+        r"""
+        Sample a segmentation by reconstructing from a prior sample from latent dist
+        and combining this with UNet features        """
+        if not testing:
+            z_prior = self.prior_latent_space.rsample()
+            self.z_prior_sample = z_prior
+        else:
+            z_prior = self.prior_latent_space.sample()
+            self.z_prior_sample = z_prior
+        return self.fcomb.forward(self.unet_features, z_prior)
 
+    def reconstruct(self, use_posterior_mean, calculate_posterior=False, z_posterior=None):
+        if use_posterior_mean:
+            z_posterior = self.posterior_latent_space.loc
+        # TODO: Check what is the difference between loc and sample and rsample.
+        else:
+            if calculate_posterior:
+                z_posterior = self.posterior_latent_space.rsample()
+        return self.fcomb.forward(self.unet_features, z_posterior)
 
+    def kl_divergence(self):
+        raise NotImplementedError
 
-
-
-
-
-
-
-
-
-
-
-
+    def elbo(self):
+        raise NotImplementedError
 
 
