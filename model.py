@@ -1,10 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions import Normal, Independent
+from torch.distributions import Normal, Independent, kl
 
 from utils import init_weights, init_weights_orthogonal_normal
+from unet_simple.unet import Unet
 
 sys_wide_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -34,7 +34,6 @@ class Encoder(nn.Module):
             self.input_ch += 1
 
         layers = []
-
         # TODO: Refactor this (in pythonic way)
         for i in range(len(num_filters)):
             """
@@ -42,6 +41,7 @@ class Encoder(nn.Module):
             """
             input_dim = self.input_ch if i == 0 else output_dim
             output_dim = num_filters[i]
+            print("input dim: {}, output dim {}".format(input_dim, output_dim))
 
             # after each one pool
             if i != 0:
@@ -51,7 +51,7 @@ class Encoder(nn.Module):
             layers.append(nn.ReLU(inplace=True))
 
             for _ in range(num_convs_per_block - 1):
-                layers.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, padding=int(padding)))
+                layers.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, padding=int(padding)))
                 layers.append(nn.ReLU(inplace=True))
 
         return nn.Sequential(*layers)
@@ -72,6 +72,7 @@ class AxisAlignedConvGaussian(nn.Module):
                  latent_dim,
                  initializers,
                  posterior=False):
+        super(AxisAlignedConvGaussian, self).__init__()
         self.channel_axis = 1  # TODO: what is this?
         self.input_ch = input_ch
         self.num_filters = num_filters
@@ -96,34 +97,35 @@ class AxisAlignedConvGaussian(nn.Module):
         nn.init.kaiming_normal_(self.conv_layer.weight, mode='fan_in', nonlinearity='relu')
         nn.init.normal_(self.conv_layer.bias)
 
-        def forward(self, input, segmentation=None):
-            if segmentation is not None:
-                self.show_img = input
-                self.show_seg = segmentation
-                input = torch.cat((input, segmentation), dim=1)
-                self.show_concat = input
-                self.sum_input = torch.sum(input)
+    def forward(self, input, segmentation=None):
+        print("forwards")
+        if segmentation is not None:
+            self.show_img = input
+            self.show_seg = segmentation
+            input = torch.cat((input, segmentation), dim=1)
+            self.show_concat = input
+            self.sum_input = torch.sum(input)
 
-            encoding = self.encoder(input)
-            self.show_enc = encoding
+        encoding = self.encoder(input)
+        self.show_enc = encoding
 
-            # compute mean of encoding
-            encoding = torch.mean(encoding, dim=2, keepdim=True)
-            encoding = torch.mean(encoding, dim=3, keepdim=True)
+        # compute mean of encoding
+        encoding = torch.mean(encoding, dim=2, keepdim=True)
+        encoding = torch.mean(encoding, dim=3, keepdim=True)
 
-            # push encoding through 1 layer nn to convert it to 2 x latent_dim shape
-            mu_log_sigma = self.conv_layer(encoding)
+        # push encoding through 1 layer nn to convert it to 2 x latent_dim shape
+        mu_log_sigma = self.conv_layer(encoding)
 
-            # TODO: Check all this logic, and inputs outputs
-            mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
-            mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
+        # TODO: Check all this logic, and inputs outputs
+        mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
+        mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
 
-            mu = mu_log_sigma[:, :self.latent_dim]
-            log_sigma = mu_log_sigma[:, self.latent_dim:]
+        mu = mu_log_sigma[:, :self.latent_dim]
+        log_sigma = mu_log_sigma[:, self.latent_dim:]
 
-            # TODO: Explore this!
-            diag_cov_multiv_dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
-            return diag_cov_multiv_dist
+        # TODO: Explore this!
+        diag_cov_multiv_dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
+        return diag_cov_multiv_dist
 
 
 class FComb(nn.Module):
@@ -182,7 +184,7 @@ class FComb(nn.Module):
         repeat_idx = [1] * a.dim()
         repeat_idx[dim] = n_tile
         a = a.repeat(*repeat_idx)
-        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)]))
+        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])).to(sys_wide_device)
         return torch.index_select(a, dim, order_index)
 
 
@@ -207,7 +209,7 @@ class ProbabilisticUNet(nn.Module):
         self.beta = beta
         self.z_prior_sample = 0
 
-        self.u_net = UNet(self.input_channels,
+        self.unet = Unet(self.input_channels,
                           self.num_classes,
                           self.num_filters,
                           self.initializers,
@@ -232,7 +234,7 @@ class ProbabilisticUNet(nn.Module):
         """
         if training:
             self.posterior_latent_space = self.posterior.forward(patch, mask)
-        self.prior_latent_space = self.prior.forward(patch, mask)
+        self.prior_latent_space = self.prior.forward(patch)
         self.unet_features = self.unet.forward(patch, False)
 
     def sample(self, testing=False):
@@ -256,10 +258,34 @@ class ProbabilisticUNet(nn.Module):
                 z_posterior = self.posterior_latent_space.rsample()
         return self.fcomb.forward(self.unet_features, z_posterior)
 
-    def kl_divergence(self):
-        raise NotImplementedError
+    def kl_divergence(self, analytic=True, calculate_posterior=False, z_posterior=False):
+        if analytic:
+            kl_div = kl.kl_divergence(self.posterior_latent_space, self.prior_latent_space)
+        else:
+            if calculate_posterior:
+                z_posterior = self.posterior_latent_space.rsample()
+            log_posterior_prob = self.posterior_latent_space.log_prob(z_posterior)
+            log_prior_prob = self.prior_latent_space.log_prob(z_posterior)
+            kl_div = log_posterior_prob - log_prior_prob
+        return kl_div
 
-    def elbo(self):
-        raise NotImplementedError
+    def elbo(self, mask, analytic_kl=True, reconstruct_posterior_mean=False):
+        r"""
+        Evidence lower bound of the log-likelihood or P(Y|X)
+        """
 
+        z_posterior = self.posterior_latent_space.rsample()
+        self.kl = torch.mean(self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
+
+        # Here we use the posterior sample sampled above
+        self.reconstruction = \
+            self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False, z_posterior=z_posterior)
+
+        criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
+        reconstruction_loss = criterion(input=self.reconstruction, target=mask)
+
+        self.reconstruction_loss = torch.sum(reconstruction_loss)
+        self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
+
+        return -(self.reconstruction_loss + self.beta * self.kl)
 
