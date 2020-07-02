@@ -95,11 +95,12 @@ class GenericRSUFBlock(nn.Module):
             downward = layer(downward)
             outputs.append(downward)
 
+        hx_in = outputs.pop(0).clone()
         upward = outputs.pop()
         for layer in self.decoder:
             upward = layer(torch.cat((outputs.pop(), upward), 1))
 
-        # return upward +
+        return hx_in + upward
 
 
 class U2SquaredNet(nn.Module):
@@ -107,6 +108,7 @@ class U2SquaredNet(nn.Module):
     def __init__(self, in_ch=3, out_ch=1):
         super(U2SquaredNet, self).__init__()
 
+        # encoder
         self.stage1 = GenericRSUBlock(in_ch, 16, 64, L=7)
         self.pool12 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
 
@@ -119,22 +121,29 @@ class U2SquaredNet(nn.Module):
         self.stage4 = GenericRSUBlock(64, 16, 64, L=4)
         self.pool45 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
 
+        self.stage5 = GenericRSUFBlock(64, 16, 64, L=4)
+        self.pool56 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
 
+        self.stage6 = GenericRSUFBlock(64, 16, 64, L=4)
 
+        # decoder
+        self.stage5d = GenericRSUFBlock(128, 16, 64, L=4)
+        self.stage4d = GenericRSUBlock(128, 16, 64, L=4)
+        self.stage3d = GenericRSUBlock(128, 16, 64, L=5)
+        self.stage4d = GenericRSUBlock(128, 16, 64, L=6)
+        self.stage1d = GenericRSUBlock(128, 16, 64, L=7)
 
+        self.out_conv = nn.Conv2d(6, out_ch, 1)
 
 
 if __name__ == '__main__':
+    print()
     # Test blocks
     # first RSU block, and going down to a u-net of GenRSUblocks.
     # c1 = GenericRSUBlock(3, 32, 64, L=4)
+    # c1f = GenericRSUFBlock(3, 32, 64, L=4)
+    # c1f.forward(torch.Tensor(torch.rand((1, 3, 256, 256))))
+    # c1f.forward(torch.Tensor(torch.rand((1, 3, 256, 256))))
 
     # U-squared Generic
-    c1f = GenericRSUFBlock(3, 32, 64, L=4)
 
-    c1f.forward(torch.Tensor(torch.rand((1, 3, 256, 256))))
-
-
-
-    import numpy as np
-    # c1f.forward(torch.Tensor(torch.rand((1, 3, 256, 256))))
