@@ -20,13 +20,28 @@ from nath_data_loader import RandomCrop
 from nath_data_loader import ToTensor
 from nath_data_loader import ToTensorLab
 from nath_data_loader import SalObjDataset
-
 from model import U2SquaredNet
 
+
+# Configs
+model_name = 'u2net'  # 'u2netp'
+
+data_dir = "/home/dane/Schen/Data/DUTS-TR/"
+tra_image_dir = "DUTS-TR-Image/"
+tra_label_dir = "DUTS-TR-Mask/"
+
+image_ext = '.jpg'
+label_ext = '.png'
+
+
+epoch_num = 100000
+batch_size_train = 1
+batch_size_val = 1
+train_num = 0
+val_num = 0
+
 # ------- 1. define loss function --------
-
 bce_loss = nn.BCELoss(size_average=True)
-
 
 def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
     loss0 = bce_loss(d0, labels_v)
@@ -46,22 +61,7 @@ def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
 
 # ------- 2. set the directory of training dataset --------
 
-model_name = 'u2net'  # 'u2netp'
-
-data_dir = "/home/dane/Schen/Data/DUTS-TR/"
-tra_image_dir = "DUTS-TR-Image/"
-tra_label_dir = "DUTS-TR-Mask/"
-
-image_ext = '.jpg'
-label_ext = '.png'
-
 model_dir = os.path.join(os.getcwd(), 'saved_models', model_name + os.sep)
-
-epoch_num = 100000
-batch_size_train = 1
-batch_size_val = 1
-train_num = 0
-val_num = 0
 
 tra_img_name_list = glob.glob(data_dir + tra_image_dir + '*' + image_ext)
 
@@ -95,10 +95,12 @@ salobj_dataloader = DataLoader(salobj_dataset, batch_size=batch_size_train, shuf
 
 # ------- 3. define model --------
 # define the net
-if (model_name == 'u2net'):
+if model_name == 'u2net_dane':
     net = U2SquaredNet(3, 1)
-elif (model_name == 'u2netp'):
-    net = U2SquaredNet(3, 1)
+elif model_name == 'u2net_generic':
+    raise NotImplementedError()
+else:
+    raise NotImplementedError()
 
 if torch.cuda.is_available():
     print("CUDA available.")

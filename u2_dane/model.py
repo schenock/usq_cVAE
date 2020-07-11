@@ -8,6 +8,9 @@ def _upsample_like(src, dst):
 
 
 class ConvBNReluBlock(nn.Module):
+    r"""
+    Conv, BatchNorm, ReLU operations encapsulated in a block.
+    """
     def __init__(self, input_ch, output_ch, dirate):
         super(ConvBNReluBlock, self).__init__()
         self.conv = nn.Conv2d(input_ch, output_ch, kernel_size=3, padding=1*dirate, dilation=1 * dirate)
@@ -19,6 +22,11 @@ class ConvBNReluBlock(nn.Module):
 
 
 class GenericRSUBlock(nn.Module):
+    r"""
+    Generic RSU Block, parametrized by `L`, the parameter defines depth.
+    RSU block as proposed in <TODO: add link>, which has a U-net like architecture
+
+    """
     def __init__(self, input_ch=3, mid_ch=12, output_ch=3, L=None):
         super(GenericRSUBlock, self).__init__()
 
@@ -44,8 +52,6 @@ class GenericRSUBlock(nn.Module):
 
         decoder.append(ConvBNReluBlock(input_ch=mid_ch*2, output_ch=output_ch, dirate=1))  # TODO: verify mid_ch * 2
 
-
-        # print(nn.Sequential(*encoder, self.last_layer_enc, *decoder))
         self.encoder = nn.Sequential(*encoder)
         self.decoder = nn.Sequential(*decoder)
 
@@ -63,41 +69,41 @@ class GenericRSUBlock(nn.Module):
             if isinstance(layer, ConvBNReluBlock):
                 outputs.append(downward)
 
-        hx_in = outputs.pop(0).clone()  # TODO: clone might be unnecessary here
+        hx_in = outputs.pop(0).clone()
         assert len(self.decoder) == len(outputs)
         # decoder
         upward = self.last_layer_enc.forward(downward)
         for layer in self.decoder[:-1]:
             upward = layer(torch.cat((upward, outputs.pop()), 1))
             upward = _upsample_like(upward, outputs[-1])
-            # print("upsampling: ", layer)
 
-        # print(self)
-        # print(outputs[-1].size(), upward.size(), hx_in.size())
         return hx_in + self.decoder[-1](torch.cat((upward, outputs.pop()), 1))
 
 
 class GenericRSUFBlock(nn.Module):
+    r"""
+    Generic RSUF block. A modification of the original RSU block, with dilated convolutions.
+    The parameter `dirate` controls the sparsity/density of the dilatations.
+
+    """
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3, L=4):
 
         super(GenericRSUFBlock, self).__init__()
-
         encoder = [ConvBNReluBlock(input_ch=in_ch, output_ch=out_ch, dirate=1)]
         decoder = []
 
         for i in range(L):
-            # print("enc: ", 2 ** i)
-            encoder.append(ConvBNReluBlock(input_ch=out_ch if i == 0 else mid_ch, output_ch=mid_ch, dirate=2 ** i))
+            encoder.append(
+                ConvBNReluBlock(input_ch=out_ch if i == 0 else mid_ch, output_ch=mid_ch, dirate=2 ** i)
+            )
 
         for i in range(L-2):
-            print(i)
-            # print("dec: ", 2 ** (L-2-i))
-            decoder.append(ConvBNReluBlock(input_ch=mid_ch * 2, output_ch=mid_ch, dirate=2 ** (L-2-i)))
+            decoder.append(
+                ConvBNReluBlock(input_ch=mid_ch * 2, output_ch=mid_ch, dirate=2 ** (L-2-i))
+            )
 
-        print(i)
+        i += 1
         decoder.append(ConvBNReluBlock(input_ch=mid_ch * 2, output_ch=out_ch, dirate=2 ** (L-2-i)))
-
-
         self.encoder = nn.Sequential(*encoder)
         self.decoder = nn.Sequential(*decoder)
 
@@ -211,6 +217,11 @@ class U2SquaredNet(nn.Module):
 
         d0 = self.out_conv(torch.cat((d1, d2, d3, d4, d5, d6), 1))
         return F.sigmoid(d0), F.sigmoid(d1), F.sigmoid(d2), F.sigmoid(d3), F.sigmoid(d4), F.sigmoid(d5), F.sigmoid(d6)
+
+
+class GenericUSquaredNet(nn.Module):
+    def __init__(self, L):
+        raise NotImplementedError("")
 
 
 if __name__ == '__main__':
