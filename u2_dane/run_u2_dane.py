@@ -24,7 +24,7 @@ from model import U2SquaredNet
 
 
 # Configs
-model_name = 'u2net'  # 'u2netp'
+model_name = 'u2net_dane'  # 'u2net_dane'
 
 data_dir = "/home/dane/Schen/Data/DUTS-TR/"
 tra_image_dir = "DUTS-TR-Image/"
@@ -161,7 +161,12 @@ for epoch in range(0, epoch_num):
             running_tar_loss / ite_num4val))
 
         if ite_num % save_frq == 0:
-            torch.save(net.state_dict(), model_dir + model_name + "_bce_itr_%d_train_%3f_tar_%3f.pth" % (
+            save_folder = os.path.join(model_dir, model_name)
+            if not os.path.exists(save_folder):
+                print("Folder does not exist. Creating folder: {}".format(save_folder))
+                os.makedirs(save_folder)
+
+            torch.save(net.state_dict(), save_folder + "_bce_itr_%d_train_%3f_tar_%3f.pth" % (
             ite_num, running_loss / ite_num4val, running_tar_loss / ite_num4val))
             running_loss = 0.0
             running_tar_loss = 0.0
