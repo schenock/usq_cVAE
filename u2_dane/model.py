@@ -122,6 +122,107 @@ class GenericRSUFBlock(nn.Module):
         return hx_in + upward
 
 
+class U2SquaredNetSmall(nn.Module):
+
+    def __init__(self, in_ch=3, out_ch=1, mid_ch=32, apply_side_layers=False):
+        super(U2SquaredNetSmall, self).__init__()
+        self.apply_side_layers = apply_side_layers
+
+        # encoder
+        self.stage1 = GenericRSUBlock(in_ch, 16, mid_ch, L=7)
+        self.pool12 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
+
+        self.stage2 = GenericRSUBlock(mid_ch, 16, mid_ch, L=6)
+        self.pool23 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
+
+        self.stage3 = GenericRSUBlock(mid_ch, 16, mid_ch, L=5)
+        self.pool34 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
+
+        self.stage4 = GenericRSUBlock(mid_ch, 16, mid_ch, L=4)
+        self.pool45 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
+
+        self.stage5 = GenericRSUFBlock(mid_ch, 16, mid_ch, L=4)
+        self.pool56 = nn.MaxPool2d(2, stride=2, ceil_mode=True)
+
+        self.stage6 = GenericRSUFBlock(mid_ch, 16, mid_ch, L=4)
+
+        # decoder
+        self.stage5d = GenericRSUFBlock(mid_ch * 2, 16, mid_ch, L=4)
+        self.stage4d = GenericRSUBlock(mid_ch * 2, 16, mid_ch, L=4)
+        self.stage3d = GenericRSUBlock(mid_ch * 2, 16, mid_ch, L=5)
+        self.stage2d = GenericRSUBlock(mid_ch * 2, 16, mid_ch, L=6)
+        self.stage1d = GenericRSUBlock(mid_ch * 2, 16, mid_ch, L=7)
+
+        self.side1 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+        self.side2 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+        self.side3 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+        self.side4 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+        self.side5 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+        self.side6 = nn.Conv2d(mid_ch, out_ch, 3, padding=1)
+
+        self.out_conv = nn.Conv2d(6, out_ch, 1)
+
+    def forward(self, x):
+        hx = x
+
+        hx1 = self.stage1.forward(hx)
+        hx = self.pool12(hx1)
+
+        hx2 = self.stage2.forward(hx)
+        hx = self.pool23(hx2)
+
+        hx3 = self.stage3.forward(hx)
+        hx = self.pool34(hx3)
+
+        hx4 = self.stage4.forward(hx)
+        hx = self.pool45(hx4)
+
+        hx5 = self.stage5.forward(hx)
+        hx = self.pool56(hx5)
+
+        hx6 = self.stage6.forward(hx)
+        hx6_up = _upsample_like(hx6, hx5)
+
+        # decoder
+        hx5d = self.stage5d.forward(torch.cat((hx6_up, hx5), 1))
+        hx5d_up = _upsample_like(hx5d, hx4)
+
+        hx4d = self.stage4d.forward(torch.cat((hx5d_up, hx4), 1))
+        hx4d_up = _upsample_like(hx4d, hx3)
+
+        hx3d = self.stage3d.forward(torch.cat((hx4d_up, hx3), 1))
+        hx3d_up = _upsample_like(hx3d, hx2)
+
+        hx2d = self.stage2d.forward(torch.cat((hx3d_up, hx2), 1))
+        hx2d_up = _upsample_like(hx2d, hx1)
+
+        hx1d = self.stage1d.forward(torch.cat((hx2d_up, hx1), 1))
+
+        # side output TODO: What are side outputs used for?
+        d1 = self.side1(hx1d)
+
+        d2 = self.side2(hx2d)
+        d2 = _upsample_like(d2, d1)
+
+        d3 = self.side3(hx3d)
+        d3 = _upsample_like(d3, d1)
+
+        d4 = self.side4(hx4d)
+        d4 = _upsample_like(d4, d1)
+
+        d5 = self.side5(hx5d)
+        d5 = _upsample_like(d5, d1)
+
+        d6 = self.side6(hx6)
+        d6 = _upsample_like(d6, d1)
+
+        if self.apply_side_layers:
+            d0 = self.out_conv(torch.cat((d1, d2, d3, d4, d5, d6), 1))
+            return F.sigmoid(d0), F.sigmoid(d1), F.sigmoid(d2), F.sigmoid(d3), F.sigmoid(d4), F.sigmoid(d5), F.sigmoid(d6)
+
+        return hx1d
+
+
 class U2SquaredNet(nn.Module):
 
     def __init__(self, in_ch=3, out_ch=1):

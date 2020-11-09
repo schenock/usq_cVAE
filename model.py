@@ -1,7 +1,9 @@
+from enum import Enum, unique
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Normal, Independent, kl
+from torch.distributions import Normal, Independent, MultivariateNormal, kl
 
 from utils import init_weights, init_weights_orthogonal_normal
 from unet_simple.unet import Unet
@@ -98,7 +100,7 @@ class AxisAlignedConvGaussian(nn.Module):
         nn.init.normal_(self.conv_layer.bias)
 
     def forward(self, input, segmentation=None):
-        print("forwards")
+        # print("forwards")
         if segmentation is not None:
             self.show_img = input
             self.show_seg = segmentation
@@ -116,16 +118,19 @@ class AxisAlignedConvGaussian(nn.Module):
         # push encoding through 1 layer nn to convert it to 2 x latent_dim shape
         mu_log_sigma = self.conv_layer(encoding)
 
-        # TODO: Check all this logic, and inputs outputs
         mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
         mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
 
         mu = mu_log_sigma[:, :self.latent_dim]
         log_sigma = mu_log_sigma[:, self.latent_dim:]
 
-        # TODO: Explore this!
-        diag_cov_multiv_dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
-        return diag_cov_multiv_dist
+        # TODO: Change to MultivatiateNormal (assuming it is identical to Independent(Normal, 1)
+        # diag_cov_multiv_dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
+
+        cov = torch.stack([torch.diag(sigma) for sigma in torch.exp(log_sigma)])
+        diag_cov_mvn = MultivariateNormal(mu, cov)
+
+        return diag_cov_mvn
 
 
 class FComb(nn.Module):
@@ -184,8 +189,17 @@ class FComb(nn.Module):
         repeat_idx = [1] * a.dim()
         repeat_idx[dim] = n_tile
         a = a.repeat(*repeat_idx)
-        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])).to(sys_wide_device)
+        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])).to(
+            sys_wide_device)
         return torch.index_select(a, dim, order_index)
+
+
+@unique
+class SegModel(Enum):
+    UNET_SIMPLE = 0
+    U_SQUARED_SMALL = 1
+    U_SQUARED_BIG = 2
+    U_SQUARED_SIMPLE = None
 
 
 class ProbabilisticUNet(nn.Module):
@@ -193,9 +207,11 @@ class ProbabilisticUNet(nn.Module):
 
     """
 
-    def __init__(self, input_channels=1, num_classes=1, num_filters=(32, 64, 128, 192), latent_dim=6, num_convs_fcomb=4,
+    def __init__(self, segmentation_model=0, input_channels=1, num_classes=1,
+                 num_filters=(32, 64, 128, 192), latent_dim=6, num_convs_fcomb=4,
                  beta=10.0):
         super(ProbabilisticUNet, self).__init__()
+        self.segmentation_model = segmentation_model
         self.num_classes = num_classes
         self.input_channels = input_channels
         self.num_filters = num_filters
@@ -209,11 +225,22 @@ class ProbabilisticUNet(nn.Module):
         self.beta = beta
         self.z_prior_sample = 0
 
-        self.unet = Unet(self.input_channels,
-                          self.num_classes,
-                          self.num_filters,
-                          self.initializers,
-                          apply_last_layer=False, padding=True).to(sys_wide_device)
+        if self.segmentation_model == SegModel.UNET_SIMPLE.value:
+
+            self.unet = Unet(self.input_channels,
+                             self.num_classes,
+                             self.num_filters,
+                             self.initializers,
+                             apply_last_layer=False, padding=True).to(sys_wide_device)
+        elif self.segmentation_model == SegModel.U_SQUARED_SMALL.value:
+            from u2_dane.model import U2SquaredNet
+            from u2_dane.model import U2SquaredNetSmall
+            self.unet = U2SquaredNetSmall(in_ch=1, out_ch=1, mid_ch=32).to(sys_wide_device)  # input channels = 1 grayscale inputs
+        elif self.segmentation_model == SegModel.U_SQUARED_BIG.value:
+            from u2_dane.model import BigU2Net
+            self.unet = BigU2Net(1, 1)
+        else:
+            raise NotImplementedError
 
         encoder_args = \
             (self.input_channels, self.num_filters, self.num_convs_per_block, self.latent_dim, self.initializers)
@@ -235,7 +262,13 @@ class ProbabilisticUNet(nn.Module):
         if training:
             self.posterior_latent_space = self.posterior.forward(patch, mask)
         self.prior_latent_space = self.prior.forward(patch)
-        self.unet_features = self.unet.forward(patch, False)
+
+        if self.segmentation_model == SegModel.U_SQUARED_SMALL.value or \
+                self.segmentation_model == SegModel.U_SQUARED_BIG.value:
+            self.unet_features = self.unet.forward(patch)
+        elif self.segmentation_model == SegModel.UNET_SIMPLE.value:
+            self.unet_features = self.unet.forward(patch, False)
+        print()
 
     def sample(self, testing=False):
         r"""
@@ -275,11 +308,13 @@ class ProbabilisticUNet(nn.Module):
         """
 
         z_posterior = self.posterior_latent_space.rsample()
-        self.kl = torch.mean(self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
+        self.kl = torch.mean(
+            self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
 
         # Here we use the posterior sample sampled above
         self.reconstruction = \
-            self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False, z_posterior=z_posterior)
+            self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False,
+                             z_posterior=z_posterior)
 
         criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
         reconstruction_loss = criterion(input=self.reconstruction, target=mask)
@@ -287,5 +322,4 @@ class ProbabilisticUNet(nn.Module):
         self.reconstruction_loss = torch.sum(reconstruction_loss)
         self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
 
-        return -(self.reconstruction_loss + self.beta * self.kl)
-
+        return -(self.reconstruction_loss + self.beta * self.kl), self.reconstruction_loss, self.kl, self.beta

@@ -57,15 +57,14 @@ def save_output(image_name,pred,d_dir):
 def main():
 
     # --------- 1. get image path and name ---------
-    model_name='big_u2net_dane'#u2netp
+    model_name='u2netp'#u2netp
 
 
     image_dir = os.path.join(os.getcwd(), 'test_data', 'test_images')
     prediction_dir = os.path.join(os.getcwd(), 'test_data', model_name + '_results' + os.sep)
     model_dir = os.path.join(os.getcwd(), 'saved_models', model_name, model_name + '.pth')
     model_dir = \
-        "/home/dane/Schen/u2squared-condVAE/u2_dane/saved_models/big_u2net_dane/" \
-        "big_u2net_dane_bce_itr_129600_train_0.510409_tar_0.057475.pth"
+        "/home/dane/Schen/u2squared-condVAE/u2_dane/saved_models/u2net_dane/14Kiter_model.pth"
 
     img_name_list = glob.glob(image_dir + os.sep + '*')
     print(img_name_list)
@@ -119,6 +118,7 @@ def main():
         save_output(img_name_list[i_test],pred,prediction_dir)
 
         del d1,d2,d3,d4,d5,d6,d7
+
 
 if __name__ == "__main__":
     main()
