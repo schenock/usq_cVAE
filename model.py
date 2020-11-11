@@ -302,7 +302,7 @@ class ProbabilisticUNet(nn.Module):
             kl_div = log_posterior_prob - log_prior_prob
         return kl_div
 
-    def elbo(self, mask, analytic_kl=True, reconstruct_posterior_mean=False):
+    def elbo(self, mask, analytic_kl=True, reconstruct_posterior_mean=False, step=None):
         r"""
         Evidence lower bound of the log-likelihood or P(Y|X)
         """
@@ -317,9 +317,58 @@ class ProbabilisticUNet(nn.Module):
                              z_posterior=z_posterior)
 
         criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
+
+        # ---------
+        if step > 70 and step % 20 == 0:
+            import matplotlib.pyplot as plt
+            plt.imshow(np.array(self.reconstruction[0].squeeze(0).detach().cpu()))
+            plt.title("reconstruction")
+            plt.show()
+            plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
+            plt.title("target")
+            plt.show()
+
         reconstruction_loss = criterion(input=self.reconstruction, target=mask)
 
         self.reconstruction_loss = torch.sum(reconstruction_loss)
         self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
 
-        return -(self.reconstruction_loss + self.beta * self.kl), self.reconstruction_loss, self.kl, self.beta
+        return -(self.reconstruction_loss + self.beta * self.kl), self.reconstruction_loss, self.beta * self.kl, self.beta
+
+    def compute_KL_CE(self, mask, analytic_kl=True, reconstruct_posterior_mean=False, step=None):
+        r"""
+        computes KL divergence and cross entropy loss.
+        """
+        z_posterior = self.posterior_latent_space.rsample()
+        self.kl = torch.mean(
+            self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
+
+        # Here we use the posterior sample sampled above
+        self.reconstruction = \
+            self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False,
+                             z_posterior=z_posterior)
+
+        criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
+
+        reconstruction_loss = criterion(input=self.reconstruction, target=mask)
+
+        self.sum_reconstruction_loss = torch.sum(reconstruction_loss)
+        self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
+
+        if step > 70 and step % 20 == 0:
+            import matplotlib.pyplot as plt
+            plt.subplot(211)
+            plt.imshow(np.array(self.reconstruction[0].squeeze(0).detach().cpu()))
+            plt.title("reconstruction")
+
+            plt.subplot(212)
+            plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
+            plt.title("target")
+
+            plt.show()
+
+        return self.kl, self.mean_reconstruction_loss
+
+
+def geco_ce(KL, mean_reconstruction_loss, lambd):
+    return KL + lambd * mean_reconstruction_loss
