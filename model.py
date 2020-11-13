@@ -233,12 +233,11 @@ class ProbabilisticUNet(nn.Module):
                              self.initializers,
                              apply_last_layer=False, padding=True).to(sys_wide_device)
         elif self.segmentation_model == SegModel.U_SQUARED_SMALL.value:
-            from u2_dane.model import U2SquaredNet
             from u2_dane.model import U2SquaredNetSmall
             self.unet = U2SquaredNetSmall(in_ch=1, out_ch=1, mid_ch=32).to(sys_wide_device)  # input channels = 1 grayscale inputs
         elif self.segmentation_model == SegModel.U_SQUARED_BIG.value:
-            from u2_dane.model import BigU2Net
-            self.unet = BigU2Net(1, 1)
+            from u2_dane.model import BigU2NetBackbone
+            self.unet = BigU2NetBackbone(1, 1).to(sys_wide_device)
         else:
             raise NotImplementedError
 
@@ -266,8 +265,10 @@ class ProbabilisticUNet(nn.Module):
         if self.segmentation_model == SegModel.U_SQUARED_SMALL.value or \
                 self.segmentation_model == SegModel.U_SQUARED_BIG.value:
             self.unet_features = self.unet.forward(patch)
+            # print("network: ", self.unet, " - ", self.unet_features.shape)
         elif self.segmentation_model == SegModel.UNET_SIMPLE.value:
             self.unet_features = self.unet.forward(patch, False)
+            # print("network: ", self.unet, " - ", self.unet_features.shape)
         print()
 
     def sample(self, testing=False):
@@ -355,14 +356,24 @@ class ProbabilisticUNet(nn.Module):
         self.sum_reconstruction_loss = torch.sum(reconstruction_loss)
         self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
 
-        if step > 70 and step % 20 == 0:
+        if step > 50 and step % 20 == 0:
             import matplotlib.pyplot as plt
-            plt.subplot(211)
-            plt.imshow(np.array(self.reconstruction[0].squeeze(0).detach().cpu()))
+            plt.subplot(221)
+            rec = self.reconstruction[1].squeeze(0).detach().cpu()
+            plt.imshow(np.array(rec))
             plt.title("reconstruction")
 
-            plt.subplot(212)
-            plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
+            plt.subplot(222)
+            plt.imshow(np.array(mask[1].squeeze(0).detach().cpu()))
+            plt.title("target")
+
+            plt.subplot(223)
+            rec = self.reconstruction[2].squeeze(0).detach().cpu()
+            plt.imshow(np.array(rec))
+            plt.title("reconstruction")
+
+            plt.subplot(224)
+            plt.imshow(np.array(mask[2].squeeze(0).detach().cpu()))
             plt.title("target")
 
             plt.show()

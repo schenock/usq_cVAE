@@ -23,7 +23,7 @@ test_loader = DataLoader(dataset, batch_size=1, sampler=test_sampler)
 print("Number of training/test patches:", (len(train_indices), len(test_indices)))
 
 import visdom
-vis = visdom.Visdom(port=7756)
+vis = visdom.Visdom(port=7755)
 # assert vis.check_connection()
 loss_window = vis.line(
     Y=torch.zeros((1)).cpu(),
@@ -51,10 +51,10 @@ loss_window_reg= vis.line(
     X=torch.zeros((1)).cpu(),
     opts=dict(xlabel='epoch', ylabel='reg_loss', title='dane l2 loss', legend=['L2 Loss']))
 
-
 # TODO: Move to configs
-segmentation_model = SegModel.U_SQUARED_SMALL.value
+# segmentation_model = SegModel.U_SQUARED_SMALL.value
 # segmentation_model = SegModel.UNET_SIMPLE.value
+segmentation_model = SegModel.U_SQUARED_BIG.value
 
 net = ProbabilisticUNet(segmentation_model=segmentation_model, input_channels=1, num_classes=1,
                         num_filters=[32, 64, 128, 192], latent_dim=6,
