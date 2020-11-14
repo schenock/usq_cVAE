@@ -83,6 +83,27 @@ for epoch in range(epochs):
         mask = torch.unsqueeze(mask, 1)
         net.forward(patch, mask, training=True)
 
+        if step > 50 and step % 8 == 0:
+            num_preds = 4
+            predictions = []
+            # for i in range(num_preds):
+            mask_pred = net.sample(testing=True)
+            mask_pred = (torch.sigmoid(mask_pred) > 0.5).float()
+            mask_pred = torch.squeeze(mask_pred, 0)
+            # predictions.append(mask_pred)
+            for i in range(num_preds):  # batch size
+                import matplotlib.pyplot as plt
+                plt.subplot(121)
+                plt.imshow(np.array(mask_pred[i].squeeze(0).detach().cpu()))
+                plt.title("reconstruction")
+
+                plt.subplot(122)
+                plt.imshow(np.array(mask[i].squeeze(0).detach().cpu()))
+                plt.title("reconstruction")
+                plt.show()
+
+            # predictions = torch.cat(predictions, 0)
+
         if loss_fn == 'elbo_ce':
             elbo, reconstruction_loss, kl_scaled, beta = net.elbo(mask, step=step)
             reg_loss = l2_regularisation(net.posterior) + l2_regularisation(net.prior) + l2_regularisation(net.fcomb.layers)

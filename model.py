@@ -356,27 +356,27 @@ class ProbabilisticUNet(nn.Module):
         self.sum_reconstruction_loss = torch.sum(reconstruction_loss)
         self.mean_reconstruction_loss = torch.mean(reconstruction_loss)
 
-        if step > 50 and step % 20 == 0:
-            import matplotlib.pyplot as plt
-            plt.subplot(221)
-            rec = self.reconstruction[1].squeeze(0).detach().cpu()
-            plt.imshow(np.array(rec))
-            plt.title("reconstruction")
-
-            plt.subplot(222)
-            plt.imshow(np.array(mask[1].squeeze(0).detach().cpu()))
-            plt.title("target")
-
-            plt.subplot(223)
-            rec = self.reconstruction[2].squeeze(0).detach().cpu()
-            plt.imshow(np.array(rec))
-            plt.title("reconstruction")
-
-            plt.subplot(224)
-            plt.imshow(np.array(mask[2].squeeze(0).detach().cpu()))
-            plt.title("target")
-
-            plt.show()
+        # if step > 50 and step % 20 == 0:
+        #     import matplotlib.pyplot as plt
+        #     plt.subplot(221)
+        #     rec = self.reconstruction[1].squeeze(0).detach().cpu()
+        #     plt.imshow(np.array(rec))
+        #     plt.title("reconstruction")
+        #
+        #     plt.subplot(222)
+        #     plt.imshow(np.array(mask[1].squeeze(0).detach().cpu()))
+        #     plt.title("target")
+        #
+        #     plt.subplot(223)
+        #     rec = self.reconstruction[2].squeeze(0).detach().cpu()
+        #     plt.imshow(np.array(rec))
+        #     plt.title("reconstruction")
+        #
+        #     plt.subplot(224)
+        #     plt.imshow(np.array(mask[2].squeeze(0).detach().cpu()))
+        #     plt.title("target")
+        #
+        #     plt.show()
 
         return self.kl, self.mean_reconstruction_loss
 
