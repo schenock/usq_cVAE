@@ -18,12 +18,12 @@ np.random.shuffle(indices)
 train_indices, test_indices = indices[split:], indices[:split]
 train_sampler = SubsetRandomSampler(train_indices)
 test_sampler = SubsetRandomSampler(test_indices)
-train_loader = DataLoader(dataset, batch_size=4, sampler=train_sampler)
+train_loader = DataLoader(dataset, batch_size=2, sampler=train_sampler)
 test_loader = DataLoader(dataset, batch_size=1, sampler=test_sampler)
 print("Number of training/test patches:", (len(train_indices), len(test_indices)))
 
 import visdom
-vis = visdom.Visdom(port=7756)
+vis = visdom.Visdom(port=7789)
 # assert vis.check_connection()
 loss_window = vis.line(
     Y=torch.zeros((1)).cpu(),
@@ -51,10 +51,13 @@ loss_window_reg= vis.line(
     X=torch.zeros((1)).cpu(),
     opts=dict(xlabel='epoch', ylabel='reg_loss', title='dane l2 loss', legend=['L2 Loss']))
 
-
 # TODO: Move to configs
-segmentation_model = SegModel.U_SQUARED_SMALL.value
+# segmentation_model = SegModel.U_SQUARED_SMALL.value
 # segmentation_model = SegModel.UNET_SIMPLE.value
+segmentation_model = SegModel.U_SQUARED_BIG.value
+
+SAVE_AT_STEP = 200
+MODEL_NAME = '1_punet_bigu_Indep_focal_posw15_'
 
 net = ProbabilisticUNet(segmentation_model=segmentation_model, input_channels=1, num_classes=1,
                         num_filters=[32, 64, 128, 192], latent_dim=6,
@@ -76,12 +79,48 @@ lambda_init = torch.FloatTensor([1])
 
 lambd = lambd_init
 
+
 for epoch in range(epochs):
     for step, (patch, mask, _) in enumerate(train_loader):
+        # eval
+        net.load_state_dict(torch.load("/home/dane/Schen/u2squared-condVAE/saved_checkpoints/1_punet_bigu_Indep_focal_posw15__epoch0_step2606_loss01023.pth"))
+
         patch = patch.to(device)
         mask = mask.to(device)
         mask = torch.unsqueeze(mask, 1)
         net.forward(patch, mask, training=True)
+
+        if step > -1 and step % 4 == 0:
+            num_preds = 2
+            predictions = []
+            # for i in range(num_preds):
+            mask_pred = net.sample(testing=True, mean_sample=True)
+            mask_pred = (torch.sigmoid(mask_pred) > 0.5).float()
+            mask_pred = torch.squeeze(mask_pred, 0)
+            # predictions.append(mask_pred)
+            for i in range(num_preds):  # batch size
+                import matplotlib.pyplot as plt
+                plt.subplot(121)
+                plt.imshow(np.array(mask_pred[i].squeeze(0).detach().cpu()))
+                plt.title("Reconstruction")
+
+                plt.subplot(122)
+                plt.imshow(np.array(mask[i].squeeze(0).detach().cpu()))
+                plt.title("GT")
+                plt.show()
+
+            # predictions = torch.cat(predictions, 0)
+
+        # save model
+        if ((epoch + 1) * len(train_loader) + step) % SAVE_AT_STEP == 0 and step != 0:
+            print("Saving model at: {}. Loss: {}".format(
+                ((epoch + 1) * len(train_loader) + step),
+                loss
+            ))
+            torch.save(net.state_dict(), "saved_checkpoints/{}_epoch{}_step{}_loss{}.pth".format(MODEL_NAME,
+                                                                                                 epoch,
+                                                                                                 step,
+                                                                                                 loss))
 
         if loss_fn == 'elbo_ce':
             elbo, reconstruction_loss, kl_scaled, beta = net.elbo(mask, step=step)
@@ -91,7 +130,7 @@ for epoch in range(epochs):
             # tb.add_scalar("Loss", loss, step)
             print("Loss: ", loss, ", reconst_loss:", reconstruction_loss, ", kl:", kl_scaled)
         elif loss_fn == 'geco_ce':
-            KL, constraint = net.compute_KL_CE(mask, step=step)
+            KL, constraint = net.compute_KL_CE(mask, focal=True, step=step)
             geco_ce_loss = geco_ce(KL, constraint, lambd)
             loss = geco_ce_loss.to(device)
             print("Loss: ", loss, ", lmbd: ", lambd, ", CE_loss:", constraint, ", KL:", KL)
