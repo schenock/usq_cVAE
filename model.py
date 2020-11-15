@@ -125,10 +125,10 @@ class AxisAlignedConvGaussian(nn.Module):
         log_sigma = mu_log_sigma[:, self.latent_dim:]
 
         # TODO: Change to MultivatiateNormal (assuming it is identical to Independent(Normal, 1)
-        # diag_cov_multiv_dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
+        diag_cov_mvn = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)), 1)
 
-        cov = torch.stack([torch.diag(sigma) for sigma in torch.exp(log_sigma)])
-        diag_cov_mvn = MultivariateNormal(mu, cov)
+        # cov = torch.stack([torch.diag(sigma) for sigma in torch.exp(log_sigma)])
+        # diag_cov_mvn = MultivariateNormal(mu, cov)
 
         return diag_cov_mvn
 
@@ -271,7 +271,7 @@ class ProbabilisticUNet(nn.Module):
             # print("network: ", self.unet, " - ", self.unet_features.shape)
         print()
 
-    def sample(self, testing=False):
+    def sample(self, testing=False, mean_sample=False):
         r"""
         Sample a segmentation by reconstructing from a prior sample from latent dist
         and combining this with UNet features        """
@@ -281,6 +281,8 @@ class ProbabilisticUNet(nn.Module):
         else:
             z_prior = self.prior_latent_space.sample()
             self.z_prior_sample = z_prior
+            if mean_sample:
+                self.z_prior_sample = self.prior_latent_space.mean
         return self.fcomb.forward(self.unet_features, z_prior)
 
     def reconstruct(self, use_posterior_mean, calculate_posterior=False, z_posterior=None):
@@ -336,7 +338,7 @@ class ProbabilisticUNet(nn.Module):
 
         return -(self.reconstruction_loss + self.beta * self.kl), self.reconstruction_loss, self.beta * self.kl, self.beta
 
-    def compute_KL_CE(self, mask, analytic_kl=True, reconstruct_posterior_mean=False, step=None):
+    def compute_KL_CE(self, mask, focal=False, analytic_kl=True, reconstruct_posterior_mean=False, step=None):
         r"""
         computes KL divergence and cross entropy loss.
         """
@@ -349,7 +351,11 @@ class ProbabilisticUNet(nn.Module):
             self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False,
                              z_posterior=z_posterior)
 
-        criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
+        if focal:
+            from c_loss import FocalLoss
+            criterion = FocalLoss(logits=True, reduce=True)
+        else:
+            criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
 
         reconstruction_loss = criterion(input=self.reconstruction, target=mask)
 
