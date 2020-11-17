@@ -285,6 +285,9 @@ class ProbabilisticUNet(nn.Module):
                 self.z_prior_sample = self.prior_latent_space.mean
         return self.fcomb.forward(self.unet_features, z_prior)
 
+    def sample_for_z(self, z_priors, testing=True):
+        return [self.fcomb.forward(self.unet_features, z) for z in z_priors]
+
     def reconstruct(self, use_posterior_mean, calculate_posterior=False, z_posterior=None):
         if use_posterior_mean:
             z_posterior = self.posterior_latent_space.loc
