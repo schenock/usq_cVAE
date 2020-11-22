@@ -9,11 +9,12 @@ from model import ProbabilisticUNet, SegModel, geco_ce
 from utils import l2_regularisation
 
 # settings
-segmentation_model = SegModel.U_SQUARED_BIG.value     # Make sure these two
-LOAD_MODEL_FROM = '1_punet_bigu_Indep_focal_posw15_'  # correspond
+# segmentation_model = SegModel.U_SQUARED_BIG.value     # Make sure these two
+segmentation_model = SegModel.UNET_SIMPLE.value
+LOAD_MODEL_FROM = '6_unet_Indep_elbo_nonf_noposw_lat2_b5__epoch0_step532_loss633.pth'  # correspond
 dataset_path = 'data/'
-num_test_samples = 10
-shuffle = False
+num_test_samples = 6
+shuffle = True
 
 # data
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -32,12 +33,15 @@ print("Number of test patches:", (len(test_indices)))
 
 # model
 net = ProbabilisticUNet(segmentation_model=segmentation_model, input_channels=1, num_classes=1,
-                        num_filters=[32, 64, 128, 192], latent_dim=6,
-                        num_convs_fcomb=4, beta=10.0)
+                        num_filters=[32, 64, 128, 192], latent_dim=2,
+                        num_convs_fcomb=4, beta=2.0)
 
 if LOAD_MODEL_FROM is not None:
-    net.load_state_dict(torch.load(
-        "/home/dane/Schen/u2squared-condVAE/saved_checkpoints/1_punet_bigu_Indep_focal_posw15__epoch0_step2606_loss01023.pth"))
+    import os
+    net.load_state_dict(torch.load(os.path.join(
+        "/home/dane/Schen/u2squared-condVAE/saved_checkpoints/",
+        LOAD_MODEL_FROM
+    )))
 
 net.to(device)
 net.eval()
@@ -47,7 +51,7 @@ for epoch in range(10):
 
         patch, mask = patch.to(device), mask.to(device)
         mask = torch.unsqueeze(mask, 1)
-        net.forward(patch, mask, training=True)
+        net.forward(patch, mask, training=False)
 
         masks = net.sample()
 
@@ -55,21 +59,22 @@ for epoch in range(10):
         mu = net.prior_latent_space.mean.squeeze()
 
         import matplotlib.pyplot as plt
-        plt.figure(figsize=(12,12))
+        plt.figure(figsize=(17,17))
 
         latent_vectors = []
         full = []
-        for si in range(-20, 20, 1):
+        for si in range(-3, 4, 1):
             horizontals = list()
-            for sj in range(-20, 20, 1):
+            for sj in range(-3, 4, 1):
                 z = list()
                 for i in range(2):
                     # i == dim
                     s = si if i == 0 else sj
                     z.insert(i, s * sigma[i] + mu[i])
                 # mock 4 dims because of latentdim=6
-                z.extend(mu[2:])
+                # z.extend(mu[2:])
                 z = torch.Tensor(z)
+                print("z shape", z.shape)
                 float_mask = net.sample_for_z([z.unsqueeze(0).to('cuda')])[0].squeeze().squeeze()
                 mask_for_z = (torch.sigmoid(float_mask) > 0.5).float()
                 numpy_mask = np.array(mask_for_z.detach().cpu())
@@ -83,6 +88,7 @@ for epoch in range(10):
             else:
                 full = np.hstack([full, horizontals])
         plt.imshow(full)
+        plt.scatter(mu[0].detach().cpu(), mu[1].detach().cpu(), c='r', s=3)
         plt.show()
 
 
@@ -91,13 +97,16 @@ for epoch in range(10):
         mask_pred = torch.squeeze(mask_pred, 0)
 
         import matplotlib.pyplot as plt
-        plt.subplot(121)
+        plt.subplot(131)
         plt.imshow(np.array(mask_pred[0].squeeze(0).detach().cpu()))
         plt.title(str(step) + " Reconstruction")
 
-        plt.subplot(122)
+        plt.subplot(132)
         plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
         plt.title(str(step) + "GT")
-        plt.show()
 
+        plt.subplot(133)
+        plt.imshow(np.array(patch[0].squeeze(0).detach().cpu()))
+        plt.title(str(step) + " Image")
+        plt.show()
     exit(1)
