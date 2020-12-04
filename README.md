@@ -1,2 +1,3 @@
 # u2squared-condVAE
-probabilistic u-2 net.
+
+constrained probabilistic salient obj. segmentation.
