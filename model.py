@@ -75,7 +75,7 @@ class AxisAlignedConvGaussian(nn.Module):
                  initializers,
                  posterior=False):
         super(AxisAlignedConvGaussian, self).__init__()
-        self.channel_axis = 1  # TODO: what is this?
+        self.channel_axis = 1  # TODO: change axis channels.
         self.input_ch = input_ch
         self.num_filters = num_filters
         self.num_convs_per_block = num_convs_per_block
@@ -88,7 +88,7 @@ class AxisAlignedConvGaussian(nn.Module):
             Encoder(self.input_ch, self.num_filters, self.num_convs_per_block, initializers, posterior=self.posterior)
         self.conv_layer = nn.Conv2d(num_filters[-1], 2 * latent_dim, kernel_size=(1, 1), stride=1)
 
-        # --- what is this ? ---
+        # --- TODO: check seg. init
         self.show_img = 0
         self.show_seg = 0
         self.show_concat = 0
@@ -254,6 +254,17 @@ class ProbabilisticUNet(nn.Module):
                            {'w': 'orthogonal', 'b': 'normal'}, use_tile=True).to(sys_wide_device)
         # TODO: Clarify why orthogonal init here?
 
+    def model_description(self):
+        desc = dict()
+        desc['segmentation_model'] = self.segmentation_model
+        desc['input_channels'] = self.input_channels
+        desc['num_classes'] = self.num_classes
+        desc['num_filters'] = self.num_filters
+        desc['latent_dim'] = self.latent_dim
+        desc['num_convs_fcomb'] = self.num_convs_fcomb
+        desc['beta'] = self.beta
+        return desc
+
     def forward(self, patch, mask, training=True):
         r"""
 
@@ -323,16 +334,17 @@ class ProbabilisticUNet(nn.Module):
                              z_posterior=z_posterior)
 
         criterion = nn.BCEWithLogitsLoss(size_average=False, reduce=False, reduction=None)
+        # pos_weight=torch.tensor(15.),
 
         # ---------
-        if step > 70 and step % 20 == 0:
-            import matplotlib.pyplot as plt
-            plt.imshow(np.array(self.reconstruction[0].squeeze(0).detach().cpu()))
-            plt.title("reconstruction")
-            plt.show()
-            plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
-            plt.title("target")
-            plt.show()
+        # if step > 70 and step % 20 == 0:
+        #     import matplotlib.pyplot as plt
+        #     plt.imshow(np.array(self.reconstruction[0].squeeze(0).detach().cpu()))
+        #     plt.title("reconstruction")
+        #     plt.show()
+        #     plt.imshow(np.array(mask[0].squeeze(0).detach().cpu()))
+        #     plt.title("target")
+        #     plt.show()
 
         reconstruction_loss = criterion(input=self.reconstruction, target=mask)
 
